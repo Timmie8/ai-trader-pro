@@ -9,7 +9,7 @@ st.set_page_config(page_title="AI Precision Scalper", layout="wide")
 st.markdown("<style>.stApp { background-color: #0b1117; color: #ffffff; }</style>", unsafe_allow_html=True)
 
 def calculate_detailed_score(df):
-    if df is None or len(df) < 14: return 0
+    if df is None or len(df) < 5: return 0
     
     score = 0
     curr = df['Close'].iloc[-1]
@@ -18,27 +18,18 @@ def calculate_detailed_score(df):
     ema9 = df['Close'].ewm(span=9).mean().iloc[-1]
     if curr > ema9: score += 40
     
-    # Check 2: RSI Momentum (30 punten)
-    delta = df['Close'].diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-    ema_up = up.ewm(com=13, adjust=False).mean()
-    ema_down = down.ewm(com=13, adjust=False).mean()
-    rs = ema_up / ema_down
-    rsi = 100 - (100 / (1 + rs)).iloc[-1]
-    if rsi > 50: score += 30
-    
-    # Check 3: Prijs richting (30 punten)
-    if curr > df['Close'].iloc[-2]: score += 30
+    # Check 2: Prijs richting (60 punten)
+    if curr > df['Close'].iloc[-2]: score += 60
     
     return int(score)
 
 def analyze_ticker(ticker):
     try:
-        # Haal data op
         t = yf.Ticker(ticker)
+        # Haal data op met extra checks
         d15 = t.history(period="2d", interval="15m")
-        d1h = t.history(period="5d", interval="60m")
+        d1h = t.history(period="5d", interval="1h")
+        if d1h.empty: d1h = t.history(period="5d", interval="60m") # Backup interval
         dd = t.history(period="100d", interval="1d")
 
         if dd.empty: return None
@@ -58,13 +49,23 @@ def analyze_ticker(ticker):
         ai_val = ((float(LinearRegression().fit(X, y).predict(np.array([[23]]))[0][0]) / curr_p) - 1) * 100
 
         # Status logica
-        if safe and s15 > 60 and s1h > 60: stat, col = "🚀 STRONG BUY", "#00ff88"
-        elif s15 > 70: stat, col = "👀 INTRADAY PUMP", "#7fff00"
+        if safe and s15 >= 70 and s1h >= 70: stat, col = "🚀 STRONG BUY", "#00ff88"
+        elif s15 >= 70: stat, col = "👀 INTRADAY PUMP", "#7fff00"
         elif safe: stat, col = "✅ SWING READY", "#aff5b4"
         else: stat, col = "❌ BEARISH / WAIT", "#8b949e"
 
-        return {"T": ticker, "P": curr_p, "15": s15, "1H": s1h, "S": stat, "C": col, "AI": ai_val, "SAFE": safe}
-    except:
+        # LET OP: Sleutels zijn nu consistent kleine letters
+        return {
+            "ticker": ticker, 
+            "price": curr_p, 
+            "score15": s15, 
+            "score1h": s1h, 
+            "status": stat, 
+            "color": col, 
+            "ai": ai_val, 
+            "safe": safe
+        }
+    except Exception as e:
         return None
 
 # --- UI ---
@@ -72,32 +73,34 @@ st.title("🏹 Multi-Timeframe Momentum Monitor")
 
 # Gebruik een vaste lijst om te testen
 watchlist = ["AAPL", "NVDA", "TSLA", "SGMT", "CENX", "AMD"]
-tickers = st.text_input("Voeg tickers toe (gescheiden door komma's)", ",".join(watchlist)).upper().split(",")
+tickers_input = st.text_input("Voeg tickers toe (bijv: AAPL, BTC-USD)", ",".join(watchlist))
+tickers = [x.strip().upper() for x in tickers_input.split(",") if x.strip()]
 
 if st.button("🔄 Refresh Data"):
     st.rerun()
 
 # Tabel
 cols = st.columns([1, 1, 1, 1, 1, 2, 1])
-names = ["Ticker", "Prijs", "15m Momentum", "1h Momentum", "Safe Entry", "Advies", "AI 3D"]
+names = ["Ticker", "Prijs", "15m Score", "1h Score", "Safe Entry", "Advies", "AI 3D"]
 for col, name in zip(cols, names): col.write(f"**{name}**")
 
-for t in [x.strip() for x in tickers]:
+for t in tickers:
     d = analyze_ticker(t)
     if d:
         r = st.columns([1, 1, 1, 1, 1, 2, 1])
-        r[0].write(f"**{d['T']}**")
-        r[1].write(f"${d['P']:.2f}")
+        r[0].write(f"**{d['ticker']}**")
+        r[1].write(f"${d['price']:.2f}")
         
-        # Kleur de scores
-        c15 = "#00ff88" if d['15'] > 50 else "#ff4b4b"
-        c1h = "#00ff88" if d['1h'] > 50 else "#ff4b4b"
+        # Gebruik de juiste sleutelnamen: score15 en score1h
+        c15 = "#00ff88" if d['score15'] >= 50 else "#ff4b4b"
+        c1h = "#00ff88" if d['score1h'] >= 50 else "#ff4b4b"
         
-        r[2].markdown(f"<span style='color:{c15}'>{d['15']}%</span>", unsafe_allow_html=True)
-        r[3].markdown(f"<span style='color:{c1h}'>{d['1h']}%</span>", unsafe_allow_html=True)
-        r[4].write("✅" if d['SAFE'] else "❌")
-        r[5].markdown(f"<span style='color:{d['C']}; font-weight:bold;'>{d['S']}</span>", unsafe_allow_html=True)
-        r[6].write(f"{d['AI']:+.1f}%")
+        r[2].markdown(f"<span style='color:{c15}'>{d['score15']}%</span>", unsafe_allow_html=True)
+        r[3].markdown(f"<span style='color:{c1h}'>{d['score1h']}%</span>", unsafe_allow_html=True)
+        r[4].write("✅" if d['safe'] else "❌")
+        r[5].markdown(f"<span style='color:{d['color']}; font-weight:bold;'>{d['status']}</span>", unsafe_allow_html=True)
+        r[6].write(f"{d['ai']:+.1f}%")
+
 
 
 
